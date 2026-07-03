@@ -101,36 +101,52 @@ async function signWithPrivateKey(input, privateKeyPem) {
     .replace(/=+$/, '');
 }
 
+// JST(UTC+9)を明示して日時を作るヘルパー
+function jstDate(year, month, day, hour) {
+  hour = hour || 0;
+  // JSTのその時刻を、UTC基準のミリ秒に変換
+  // year-month-day hour:00 JST = (hour - 9):00 UTC の同日 (負なら前日)
+  return new Date(Date.UTC(year, month - 1, day, hour - 9, 0, 0));
+}
+
 // ==============================
 // カレンダーデータ構築
 // ==============================
 async function buildCalendarData(year, month, calendarIds, holidayCalendarId, accessToken) {
-  const startDate = new Date(year, month - 1, 1);
-  const endDate = new Date(year, month, 1);
+  const startDate = jstDate(year, month, 1, 0);
+  const endDate = jstDate(month === 12 ? year + 1 : year, month === 12 ? 1 : month + 1, 1, 0);
 
   const events = await getAllEvents(calendarIds, startDate, endDate, accessToken);
   const holidays = await getHolidays(holidayCalendarId, startDate, endDate, accessToken);
 
   const now = new Date();
-  const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  // 「今日」もJST基準で判定する
+  const jstNowMs = now.getTime() + 9 * 60 * 60 * 1000;
+  const jstNow = new Date(jstNowMs);
+  const todayY = jstNow.getUTCFullYear();
+  const todayM = jstNow.getUTCMonth() + 1;
+  const todayD = jstNow.getUTCDate();
+  const tomorrow = jstDate(todayY, todayM, todayD + 1, 0);
+
   const daysInMonth = new Date(year, month, 0).getDate();
 
   const result = {};
 
   for (let d = 1; d <= daysInMonth; d++) {
-    const date = new Date(year, month - 1, d);
-    const dow = date.getDay();
-    const isHoliday = !!holidays[formatDate(date)];
+    const dateUtcNoon = jstDate(year, month, d, 12); // dow判定用（正午JSTなら日付ズレしない）
+    const dow = dateUtcNoon.getUTCDay();
+    const isHoliday = !!holidays[formatDateYMD(year, month, d)];
     const isOff = (dow === 0 || dow === 6) || isHoliday;
-    const isPast = date < tomorrow;
+    const dateStart = jstDate(year, month, d, 0);
+    const isPast = dateStart < tomorrow;
 
     let slots = null;
     if (!isPast) {
-      const dayEvents = getDayEvents(events, date);
+      const dayEvents = getDayEvents(events, year, month, d);
       slots = {
-        weekdayNight: isOff ? null : isSlotFree(date, 21, 24, dayEvents),
-        holidayDay: !isOff ? null : isSlotFree(date, 0, 19, dayEvents),
-        holidayNight: !isOff ? null : isSlotFree(date, 21, 24, dayEvents)
+        weekdayNight: isOff ? null : isSlotFree(year, month, d, 21, 24, dayEvents),
+        holidayDay: !isOff ? null : isSlotFree(year, month, d, 0, 19, dayEvents),
+        holidayNight: !isOff ? null : isSlotFree(year, month, d, 21, 24, dayEvents)
       };
     }
 
@@ -165,6 +181,7 @@ async function getHolidays(holidayCalendarId, startDate, endDate, accessToken) {
     const data = await res.json();
     if (data.items) {
       data.items.forEach(ev => {
+        // 祝日カレンダーは終日イベント(date形式 YYYY-MM-DD)なのでそのまま使える
         const d = ev.start.date || ev.start.dateTime;
         holidays[d.substring(0, 10)] = true;
       });
@@ -173,19 +190,20 @@ async function getHolidays(holidayCalendarId, startDate, endDate, accessToken) {
   return holidays;
 }
 
-function getDayEvents(events, date) {
-  const next = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1);
+function getDayEvents(events, year, month, day) {
+  const dayStart = jstDate(year, month, day, 0);
+  const dayEnd = jstDate(year, month, day + 1, 0);
   return events.filter(ev => {
     if (ev.isAllDay) return false;
     const evStart = new Date(ev.start);
     const evEnd = new Date(ev.end);
-    return evStart < next && evEnd > date;
+    return evStart < dayEnd && evEnd > dayStart;
   });
 }
 
-function isSlotFree(date, startHour, endHour, events) {
-  const slotStart = new Date(date.getFullYear(), date.getMonth(), date.getDate(), startHour);
-  const slotEnd = new Date(date.getFullYear(), date.getMonth(), date.getDate(), endHour);
+function isSlotFree(year, month, day, startHour, endHour, events) {
+  const slotStart = jstDate(year, month, day, startHour);
+  const slotEnd = jstDate(year, month, day, endHour);
   for (const ev of events) {
     const evStart = new Date(ev.start);
     const evEnd = new Date(ev.end);
@@ -194,8 +212,6 @@ function isSlotFree(date, startHour, endHour, events) {
   return true;
 }
 
-function formatDate(date) {
-  return date.getFullYear() + '-' +
-    String(date.getMonth() + 1).padStart(2, '0') + '-' +
-    String(date.getDate()).padStart(2, '0');
+function formatDateYMD(year, month, day) {
+  return year + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
 }
