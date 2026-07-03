@@ -194,7 +194,13 @@ function getDayEvents(events, year, month, day) {
   const dayStart = jstDate(year, month, day, 0);
   const dayEnd = jstDate(year, month, day + 1, 0);
   return events.filter(ev => {
-    if (ev.isAllDay) return false;
+    if (ev.isAllDay) {
+      // 終日イベントは日付文字列で比較（date形式: YYYY-MM-DD, endは翌日扱いの場合あり）
+      const evStartDate = ev.start.substring(0, 10);
+      const evEndDate = ev.end.substring(0, 10);
+      const targetDate = formatDateYMD(year, month, day);
+      return evStartDate <= targetDate && targetDate < evEndDate;
+    }
     const evStart = new Date(ev.start);
     const evEnd = new Date(ev.end);
     return evStart < dayEnd && evEnd > dayStart;
@@ -205,6 +211,7 @@ function isSlotFree(year, month, day, startHour, endHour, events) {
   const slotStart = jstDate(year, month, day, startHour);
   const slotEnd = jstDate(year, month, day, endHour);
   for (const ev of events) {
+    if (ev.isAllDay) return false; // 終日予定がある日は全スロット不可
     const evStart = new Date(ev.start);
     const evEnd = new Date(ev.end);
     if (evStart < slotEnd && evEnd > slotStart) return false;
